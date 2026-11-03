@@ -20,7 +20,8 @@ def main():
         sys.exit(0)
 
     try:
-        with RemoteZip(url) as z:
+        # Google OTA CDN rejects suffix byte ranges; explicit ranges work.
+        with RemoteZip(url, support_suffix_range=False) as z:
             files = z.namelist()
             
             # 2. Perfect match (Scenario: payload.bin in root)
