@@ -3,7 +3,6 @@
 import argparse
 import os
 import re
-import subprocess
 import sys
 from urllib.parse import urlparse
 
@@ -70,16 +69,43 @@ def rename_outputs(outdir, partitions, source):
 def extract_partitions(source, outdir, partitions):
     os.makedirs(outdir, exist_ok=True)
     
-    # Since payload-dumper is installed via pip in the yaml, we just call it directly
-    cmd = ["payload_dumper", "--out", outdir, "--partitions", ",".join(partitions), source]
-    
     info(f"Extracting: {', '.join(partitions)}")
     info(f"Targeting: {extract_short_ota_label(source)}")
     
+    # Google OTA URLs redirect ranged GETs to a CDN. payload-dumper's CLI
+    # creates an httpx.Client with redirects disabled, so enable them here.
     try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        die(f"payload_dumper failed with exit code {e.returncode}")
+        from payload_dumper import http_file
+        from payload_dumper import main as payload_dumper_main
+
+        original_client = http_file.httpx.Client
+
+        class RedirectingClient(original_client):
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("follow_redirects", True)
+                super().__init__(*args, **kwargs)
+
+        original_argv = sys.argv[:]
+        try:
+            http_file.httpx.Client = RedirectingClient
+            sys.argv = [
+                "payload_dumper",
+                "--out", outdir,
+                "--partitions", ",".join(partitions),
+                "--workers", "4",
+                source,
+            ]
+            payload_dumper_main()
+        finally:
+            http_file.httpx.Client = original_client
+            sys.argv = original_argv
+    except ImportError as e:
+        die(f"payload_dumper is unavailable: {e}")
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            die(f"payload_dumper failed with exit code {e.code}")
+    except Exception as e:
+        die(f"payload_dumper failed ({type(e).__name__}): {e}")
 
     return rename_outputs(outdir, partitions, source)
 
