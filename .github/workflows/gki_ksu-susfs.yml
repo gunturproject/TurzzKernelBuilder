@@ -248,6 +248,28 @@ jobs:
           set -euo pipefail
           rm -rf kernel_workspace && mkdir -p kernel_workspace && cd kernel_workspace
           repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
+
+          # Google no longer advertises the August 2025 common branch. Pin its
+          # latest official 6.12.38 respin (r26) so repo sync can fetch the ref.
+          if [ "$MANIFEST_BRANCH" = "common-android16-6.12-2025-08" ]; then
+            MANIFEST_FILE=".repo/manifests/default.xml"
+            OFFICIAL_SHA="e041bbed5cbfc362ccdc3ce3e5e1d754cf569ed2"
+            OFFICIAL_TAG="refs/tags/android16-6.12-2025-08_r26"
+            python3 - "$MANIFEST_FILE" "$OFFICIAL_SHA" "$OFFICIAL_TAG" <<'PY'
+          from pathlib import Path
+          import sys
+
+          manifest_path = Path(sys.argv[1])
+          official_sha, official_tag = sys.argv[2:]
+          content = manifest_path.read_text()
+          old = 'revision="android16-6.12-2025-08" upstream="android16-6.12-2025-08"'
+          new = f'revision="{official_sha}" upstream="{official_tag}"'
+          if content.count(old) != 1:
+              raise SystemExit("Expected exactly one kernel/common revision in the manifest")
+          manifest_path.write_text(content.replace(old, new, 1))
+          print(f"Pinned kernel/common to {official_tag} ({official_sha})")
+          PY
+          fi
           
           MAX_RETRIES=3
           for i in $(seq 1 $MAX_RETRIES); do
