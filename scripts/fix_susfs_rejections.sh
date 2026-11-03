@@ -108,6 +108,58 @@ if [ -f "common/fs/proc/task_mmu.c.rej" ]; then
     fi
 fi
 
+# 4. GKI 6.12: relocate SUSFS exec header when the upstream dma-buf context is absent
+if [ -f "common/fs/exec.c.rej" ]; then
+    echo ">>> Found exec.c.rej. Checking for the known SUSFS header-context mismatch..."
+    if [ ! -f "common/include/linux/susfs_def.h" ]; then
+        echo "[-] CRITICAL: SUSFS header is missing; cannot repair exec.c safely." >&2
+        exit 1
+    fi
+
+    python3 - <<'PY'
+from pathlib import Path
+
+rej = Path("common/fs/exec.c.rej")
+src = Path("common/fs/exec.c")
+lines = rej.read_text().splitlines()
+hunks = [line for line in lines if line.startswith("@@")]
+additions = [line[1:] for line in lines if line.startswith("+") and not line.startswith("+++")]
+expected = [
+    "#ifdef CONFIG_KSU_SUSFS",
+    "#include <linux/susfs_def.h>",
+    "#endif",
+]
+if len(hunks) != 1 or additions != expected:
+    raise SystemExit("exec.c.rej contains changes beyond the known SUSFS include hunk")
+
+content = src.read_text()
+include = "#include <linux/susfs_def.h>"
+if include not in content:
+    anchor = "#include <linux/ksm.h>\n"
+    if content.count(anchor) != 1:
+        raise SystemExit("Expected a unique linux/ksm.h include in common/fs/exec.c")
+    guarded_include = (
+        "#ifdef CONFIG_KSU_SUSFS\n"
+        "#include <linux/susfs_def.h>\n"
+        "#endif\n"
+    )
+    content = content.replace(anchor, anchor + guarded_include, 1)
+    src.write_text(content)
+
+if include not in src.read_text():
+    raise SystemExit("Failed to add the SUSFS header to common/fs/exec.c")
+print("Repaired the SUSFS exec.c include after linux/ksm.h")
+PY
+
+    if grep -Fq "#include <linux/susfs_def.h>" common/fs/exec.c; then
+        rm "common/fs/exec.c.rej"
+        echo "  -> exec.c SUSFS header fix verified!"
+    else
+        echo "[-] CRITICAL: exec.c SUSFS header fix was not applied." >&2
+        exit 1
+    fi
+fi
+
 # Final Validation
 echo ">>> Checking for unresolved patch rejections..."
 mapfile -t REMAINING_REJ < <(find common -type f -name '*.rej')
